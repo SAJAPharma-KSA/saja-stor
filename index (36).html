@@ -1,0 +1,1023 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>متجر الأكواد</title>
+<link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@300;400;500;700;800;900&display=swap" rel="stylesheet">
+
+<!-- Firebase -->
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+  import { getFirestore, doc, getDoc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyA2_Jsv3jyre4Hu0iaew5bzprkN9fdhSi4",
+    authDomain: "saja-pharmacy.firebaseapp.com",
+    projectId: "saja-pharmacy",
+    storageBucket: "saja-pharmacy.firebasestorage.app",
+    messagingSenderId: "292288798852",
+    appId: "1:292288798852:web:23fc2fcdf26c032493e2d1"
+  };
+
+  const app = initializeApp(firebaseConfig);
+  const db = getFirestore(app);
+
+  const STORE_DOC = "store/data";
+
+  // Save entire state to Firebase
+  async function fbSave(state) {
+    const payload = {
+      products: state.products,
+      orders: state.orders,
+      settings: state.settings,
+      _version: state._version
+    };
+
+    // التحقق من حجم المستند قبل الإرسال (حد Firestore: 1 ميغابايت = 1,048,576 بايت)
+    const sizeBytes = new Blob([JSON.stringify(payload)]).size;
+    const sizeKB = (sizeBytes / 1024).toFixed(1);
+    const FIRESTORE_LIMIT = 1048576;
+
+    if (sizeBytes > FIRESTORE_LIMIT) {
+      const msg = `❌ الحفظ فشل: حجم البيانات ${sizeKB}KB تجاوز حد Firebase (1024KB). الرجاء استخدام صور أصغر أو حذف منتجات قديمة.`;
+      console.error(msg);
+      if (window.showToast) window.showToast(msg, 'error');
+      throw new Error('FIRESTORE_SIZE_LIMIT');
+    }
+
+    try {
+      const ref = doc(db, "store", "data");
+      await setDoc(ref, payload);
+      console.log(`✓ تم الحفظ في Firebase (${sizeKB}KB)`);
+      return true;
+    } catch(e) {
+      console.error("Firebase save error:", e);
+      if (window.showToast) window.showToast('❌ فشل الحفظ في Firebase: ' + (e.message || e.code || 'خطأ غير معروف'), 'error');
+      throw e;
+    }
+  }
+
+  // Listen for real-time changes
+  function fbListen(callback) {
+    const ref = doc(db, "store", "data");
+    return onSnapshot(ref, (snap) => {
+      if (snap.exists()) {
+        callback(snap.data());
+      }
+    });
+  }
+
+  // Load once on startup
+  async function fbLoad() {
+    const ref = doc(db, "store", "data");
+    const snap = await getDoc(ref);
+    return snap.exists() ? snap.data() : null;
+  }
+
+  window.__fb = { fbSave, fbListen, fbLoad };
+  window.dispatchEvent(new Event("fb-ready"));
+</script>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+</head>
+<body>
+
+<!-- ===== STORE VIEW ===== -->
+<div class="view active" id="view-store">
+  <header class="store-header">
+    <div class="store-logo">
+      <img id="storeLogoImg" class="store-logo-img" alt="logo">
+      <span id="storeName">متجر <span>الأكواد</span></span>
+    </div>
+    <button class="admin-btn" onclick="showView('view-admin-login')">⚙ لوحة التحكم</button>
+  </header>
+  <section class="store-hero" style="padding:36px 40px 30px;text-align:center;position:relative">
+    <div style="display:inline-flex;align-items:center;gap:8px;margin-bottom:6px">
+      <span style="width:10px;height:10px;border-radius:50%;background:#1d6b3a;box-shadow:0 1px 4px rgba(29,107,58,0.3)"></span>
+      <span style="width:24px;height:2px;background:#c0c0c8;border-radius:1px"></span>
+      <span style="width:10px;height:10px;border-radius:50%;background:#c92a2a;box-shadow:0 1px 4px rgba(201,42,42,0.3)"></span>
+    </div>
+    <p id="storeTagline" style="font-size:20px;font-weight:600;color:var(--muted);margin:0">SAJA Store</p>
+  </section>
+  <div class="products-grid" id="productsGrid"></div>
+</div>
+
+<!-- ===== ADMIN LOGIN ===== -->
+<div class="view" id="view-admin-login">
+  <div class="admin-login">
+    <div class="login-box">
+      <div class="login-icon">🔐</div>
+      <h2>لوحة التحكم</h2>
+      <p>أدخل كلمة المرور للوصول</p>
+      <input type="password" id="adminPassInput" placeholder="••••••••" onkeydown="if(event.key==='Enter')adminLogin()">
+      <div class="login-error" id="loginError">كلمة المرور غير صحيحة</div>
+      <button class="login-btn" onclick="adminLogin()">دخول</button>
+      <button class="back-btn" onclick="showView('view-store')">← العودة للمتجر</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== ADMIN PANEL ===== -->
+<div class="view" id="view-admin">
+    <header class="admin-header">
+      <h1>
+        لوحة التحكم <span class="admin-badge">ADMIN</span>
+      </h1>
+      <div class="admin-actions">
+        <button class="btn-view-store" onclick="showView('view-store')">👁 عرض المتجر</button>
+        <button class="btn-logout" onclick="adminLogout()">خروج</button>
+      </div>
+    </header>
+    <div class="admin-tabs">
+      <button class="tab-btn active" onclick="switchTab('orders')">📋 الطلبات</button>
+      <button class="tab-btn" onclick="switchTab('products')">📦 المنتجات</button>
+      <button class="tab-btn" onclick="switchTab('settings')">⚙️ الإعدادات</button>
+    </div>
+
+    <!-- ORDERS -->
+    <div class="tab-content active" id="tab-orders">
+      <div class="orders-header">
+        <h2>قائمة الطلبات</h2>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <span class="orders-count" id="ordersCount">0 طلب</span>
+          <button class="btn-export-excel" onclick="exportToExcel()" title="تصدير جميع الطلبات بكامل التفاصيل">📥 تصدير الطلبات (Excel)</button>
+          <button class="btn-export-customers" onclick="exportCustomers()" title="تصدير قائمة الزبائن الذين طلبوا">👥 تصدير الزبائن (Excel)</button>
+        </div>
+      </div>
+      <div id="ordersContainer"></div>
+    </div>
+
+    <!-- PRODUCTS -->
+    <div class="tab-content" id="tab-products">
+      <div class="products-admin">
+        <div>
+          <div class="add-product-form">
+            <h3>➕ إضافة منتج جديد</h3>
+            <div class="form-group-admin">
+              <label>اسم المنتج</label>
+              <input type="text" id="p_name" placeholder="مثال: كود نتفليكس شهر">
+            </div>
+            <div class="form-group-admin">
+              <label>الوصف</label>
+              <textarea id="p_desc" placeholder="وصف قصير للمنتج..."></textarea>
+            </div>
+            <div class="form-row">
+              <div class="form-group-admin">
+                <label>السعر</label>
+                <input type="text" id="p_price" placeholder="99 ريال">
+              </div>
+              <div class="form-group-admin">
+                <label>الكمية</label>
+                <input type="number" id="p_stock" placeholder="10" min="0">
+              </div>
+            </div>
+            <div class="form-group-admin">
+              <label>صورة المنتج</label>
+              <input type="file" id="p_img" accept="image/*" onchange="previewImg(this)">
+              <img id="imgPreview" style="display:none;max-width:120px;margin-top:8px;border-radius:8px">
+            </div>
+            <button class="btn-add-product" onclick="addProduct()">➕ إضافة المنتج</button>
+          </div>
+        </div>
+        <div>
+          <h3>📦 قائمة المنتجات</h3>
+          <div id="adminProductsList"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SETTINGS -->
+    <div class="tab-content" id="tab-settings">
+      <div class="settings-form">
+        <h3>⚙️ إعدادات المتجر</h3>
+        <div class="form-group-admin">
+          <label>اسم المتجر</label>
+          <input type="text" id="s_name" placeholder="اسم المتجر">
+        </div>
+        <div class="form-group-admin">
+          <label>الشعار (Tagline)</label>
+          <input type="text" id="s_tagline" placeholder="وصف المتجر">
+        </div>
+        <div class="form-group-admin">
+          <label>كلمة المرور الجديدة</label>
+          <input type="password" id="s_pass" placeholder="اتركها فارغة إذا لا تريد التغيير">
+        </div>
+        <div class="form-group-admin">
+          <label>لوقو المتجر</label>
+          <input type="file" id="s_logo" accept="image/*" onchange="previewLogo(this)">
+          <img id="logoPreview" style="display:none;max-height:80px;margin-top:8px;border-radius:8px">
+          <button id="removeLogoBtn" style="display:none;margin-top:8px" onclick="removeLogo()">🗑 حذف اللوقو</button>
+        </div>
+        <button class="btn-save-settings" onclick="saveSettings()">💾 حفظ الإعدادات</button>
+      </div>
+    </div>
+</div>
+
+<!-- ===== SUCCESS VIEW ===== -->
+<div class="view" id="view-success">
+  <div class="success-box">
+    <div class="success-icon">✅</div>
+    <h2>تم الطلب بنجاح!</h2>
+    <p>رقم طلبك: <strong id="successOrderId"></strong></p>
+    <p style="color:var(--muted);font-size:14px">سيتم التواصل معك قريباً</p>
+    <button class="back-store-btn" onclick="showView('view-store')">← العودة للمتجر</button>
+  </div>
+</div>
+
+<!-- ===== BUY MODAL ===== -->
+<div class="modal" id="buyModal">
+  <div class="modal-box">
+    <div class="modal-header">
+      <h3 id="modalProductName"></h3>
+      <span class="modal-price" id="modalProductPrice"></span>
+    </div>
+    <div class="form-group-admin">
+      <label>اسمك الكامل</label>
+      <input type="text" id="buyName" placeholder="أدخل اسمك">
+    </div>
+    <div class="form-group-admin">
+      <label>البريد الإلكتروني</label>
+      <input type="email" id="buyEmail" placeholder="example@email.com" dir="ltr">
+    </div>
+    <div class="form-group-admin">
+      <label>الكمية</label>
+      <input type="number" id="buyQty" value="1" min="1">
+    </div>
+    <div style="display:flex;gap:10px;margin-top:16px">
+      <button class="btn-confirm-order" onclick="confirmOrder()">✅ تأكيد الطلب</button>
+      <button class="btn-cancel" onclick="closeModal()">إلغاء</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<!-- Loading overlay -->
+<div id="loadingOverlay" style="position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px;color:#fff;font-family:Tajawal,sans-serif;font-size:16px">
+  <div style="width:40px;height:40px;border:3px solid rgba(255,255,255,0.3);border-top-color:#fff;border-radius:50%;animation:spin 0.8s linear infinite"></div>
+  جاري الاتصال بالمتجر...
+</div>
+
+<style>
+@keyframes spin{to{transform:rotate(360deg)}}
+  :root {
+    --bg: #f7f5f3;
+    --surface: #ffffff;
+    --card: #ffffff;
+    --border: #e4e2dd;
+    --accent: #1d6b3a;        /* أخضر SAJA */
+    --accent2: #2a8f4d;        /* أخضر فاتح للتدرج */
+    --accent-red: #c92a2a;     /* أحمر SAJA للمسات */
+    --accent-red-soft: #f3dfdf;
+    --accent-soft: #e8f1eb;    /* أخضر فاتح جداً للخلفيات */
+    --text: #1a2e1f;
+    --muted: #6b6b73;
+    --danger: #c92a2a;
+    --success: #1d6b3a;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Tajawal', sans-serif; background: var(--bg); color: var(--text); direction: rtl; min-height: 100vh; }
+
+  .view { display: none; min-height: 100vh; }
+  .view.active { display: block; }
+
+  /* STORE */
+  .store-header {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 18px 40px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    box-shadow: 0 2px 12px rgba(29, 107, 58, 0.06);
+    position: relative;
+  }
+  /* شريط تزييني رفيع بألوان هوية SAJA أسفل الهيدر */
+  .store-header::after {
+    content: '';
+    position: absolute;
+    left: 0; right: 0; bottom: -1px;
+    height: 3px;
+    background: linear-gradient(90deg,
+      #1d6b3a 0%, #1d6b3a 38%,
+      #c0c0c8 38%, #c0c0c8 50%,
+      #c92a2a 50%, #c92a2a 100%
+    );
+  }
+  .store-logo { display: flex; align-items: center; gap: 16px; }
+  .store-logo-img { height: 72px; max-width: 240px; object-fit: contain; display: none; }
+  #storeName { font-size: 22px; font-weight: 800; color: var(--text); letter-spacing: 0.3px; }
+  #storeName span { color: var(--accent); }
+  .admin-btn { background: transparent; border: 1.5px solid var(--border); color: var(--muted); padding: 8px 18px; border-radius: 8px; cursor: pointer; font-family: inherit; font-size: 14px; font-weight: 600; transition: all 0.2s; }
+  .admin-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .products-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 24px; padding: 32px 40px; max-width: 1400px; margin: 0 auto; }
+  .product-card { background: var(--card); border-radius: 16px; overflow: hidden; border: 1px solid var(--border); transition: transform 0.2s, box-shadow 0.2s; position: relative; }
+  .product-card:hover { transform: translateY(-4px); box-shadow: 0 8px 32px rgba(0,0,0,0.10); }
+  .product-card.sold-out { opacity: 0.7; }
+  .product-img { width: 100%; height: 180px; object-fit: cover; display: block; }
+  .product-img-placeholder { width: 100%; height: 180px; background: linear-gradient(135deg, #f0f0f5, #e0e0ea); display: flex; align-items: center; justify-content: center; font-size: 48px; }
+  .sold-out-overlay { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: rgba(201, 42, 42, 0.78); display: flex; align-items: center; justify-content: center; color: #fff; font-size: 20px; font-weight: 900; letter-spacing: 2px; }
+  .product-info { padding: 16px; }
+  .product-name { font-size: 16px; font-weight: 800; margin-bottom: 6px; }
+  .product-desc { font-size: 13px; color: var(--muted); margin-bottom: 12px; line-height: 1.5; }
+  .product-meta { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+  .product-price { font-size: 18px; font-weight: 900; color: var(--accent); }
+  .product-stock { font-size: 12px; color: var(--success); font-weight: 700; background: rgba(58,168,106,0.1); padding: 2px 8px; border-radius: 20px; }
+  .product-stock.low { color: #e07a30; background: rgba(224,122,48,0.1); }
+  .buy-btn { width: 100%; padding: 10px; background: linear-gradient(135deg, var(--accent), var(--accent2)); color: #fff; border: none; border-radius: 10px; font-family: inherit; font-size: 15px; font-weight: 800; cursor: pointer; transition: opacity 0.2s; }
+  .buy-btn:hover { opacity: 0.9; }
+  .buy-btn:disabled { background: var(--border); color: var(--muted); cursor: not-allowed; opacity: 1; }
+
+  /* MODAL */
+  .modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 500; align-items: center; justify-content: center; }
+  .modal.open { display: flex; }
+  .modal-box { background: var(--surface); border-radius: 20px; padding: 32px; max-width: 480px; width: 90%; box-shadow: 0 20px 60px rgba(0,0,0,0.2); }
+  .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+  .modal-header h3 { font-size: 18px; font-weight: 800; }
+  .modal-price { font-size: 20px; font-weight: 900; color: var(--accent); }
+  .btn-confirm-order { flex: 1; background: linear-gradient(135deg, var(--accent), var(--accent2)); color: #fff; border: none; padding: 12px; border-radius: 10px; font-family: inherit; font-size: 15px; font-weight: 800; cursor: pointer; }
+  .btn-cancel { background: var(--bg); color: var(--muted); border: 1px solid var(--border); padding: 12px 20px; border-radius: 10px; font-family: inherit; font-size: 14px; cursor: pointer; }
+
+  /* FORMS */
+  .form-group-admin { margin-bottom: 14px; }
+  .form-group-admin label { display: block; font-size: 13px; font-weight: 700; color: var(--muted); margin-bottom: 6px; }
+  .form-group-admin input, .form-group-admin textarea, .form-group-admin select { width: 100%; padding: 10px 14px; border: 1.5px solid var(--border); border-radius: 10px; font-family: inherit; font-size: 14px; color: var(--text); background: var(--bg); outline: none; transition: border-color 0.2s; }
+  .form-group-admin input:focus, .form-group-admin textarea:focus { border-color: var(--accent); }
+  .form-group-admin textarea { resize: vertical; min-height: 70px; }
+  .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+  /* ADMIN */
+  .admin-header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 18px 40px; display: flex; align-items: center; justify-content: space-between; }
+  .admin-header h1 { font-size: 22px; font-weight: 900; }
+  .admin-badge { background: linear-gradient(135deg, var(--accent), var(--accent2)); color: #fff; font-size: 11px; padding: 3px 10px; border-radius: 20px; font-weight: 800; margin-right: 8px; vertical-align: middle; }
+  .admin-actions { display: flex; gap: 10px; }
+  .btn-view-store, .btn-logout { padding: 8px 18px; border-radius: 8px; font-family: inherit; font-size: 14px; font-weight: 700; cursor: pointer; transition: all 0.2s; }
+  .btn-view-store { background: var(--bg); border: 1.5px solid var(--border); color: var(--text); }
+  .btn-logout { background: var(--danger); border: none; color: #fff; }
+  .admin-tabs { background: var(--surface); border-bottom: 1px solid var(--border); padding: 0 40px; display: flex; gap: 4px; }
+  .tab-btn { padding: 14px 22px; background: transparent; border: none; border-bottom: 3px solid transparent; font-family: inherit; font-size: 14px; font-weight: 700; color: var(--muted); cursor: pointer; transition: all 0.2s; }
+  .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .tab-content { display: none; padding: 32px 40px; }
+  .tab-content.active { display: block; }
+
+  /* ORDERS */
+  .orders-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 12px; }
+  .orders-header h2 { font-size: 20px; font-weight: 900; }
+  .orders-count { background: var(--accent); color: #fff; padding: 4px 14px; border-radius: 20px; font-size: 13px; font-weight: 800; }
+  .btn-export-excel, .btn-export-customers { color: #fff; border: none; padding: 10px 18px; border-radius: 8px; font-family: inherit; font-size: 13px; font-weight: 800; cursor: pointer; transition: transform 0.15s, box-shadow 0.15s; box-shadow: 0 2px 8px rgba(0,0,0,0.12); }
+  .btn-export-excel { background: linear-gradient(135deg, #1d8348, #27ae60); }
+  .btn-export-customers { background: linear-gradient(135deg, #2c5b8e, #3498db); }
+  .btn-export-excel:hover, .btn-export-customers:hover { transform: translateY(-1px); box-shadow: 0 4px 14px rgba(0,0,0,0.18); }
+  .orders-table { width: 100%; border-collapse: collapse; background: var(--surface); border-radius: 12px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+  .orders-table thead th { background: #f8f8fc; padding: 12px 16px; text-align: right; font-size: 12px; font-weight: 800; color: var(--muted); }
+  .orders-table tbody td { padding: 12px 16px; border-top: 1px solid var(--border); font-size: 13px; }
+  .orders-table tbody tr:hover td { background: #fafafa; }
+  .order-num { font-family: monospace; font-size: 11px; background: var(--bg); padding: 2px 8px; border-radius: 6px; color: var(--muted); }
+  .order-product-badge { background: rgba(201,168,76,0.1); color: var(--accent); padding: 3px 10px; border-radius: 20px; font-size: 12px; font-weight: 700; }
+  .status-new { background: rgba(58,168,106,0.1); color: var(--success); padding: 3px 10px; border-radius: 20px; font-size: 12px; font-weight: 700; }
+  .btn-invoice { background: transparent; border: 1px solid var(--border); padding: 4px 10px; border-radius: 6px; font-size: 12px; cursor: pointer; font-family: inherit; }
+  .btn-delete-order { background: transparent; border: 1px solid rgba(224,82,82,0.3); color: var(--danger); padding: 4px 10px; border-radius: 6px; font-size: 12px; cursor: pointer; }
+
+  /* PRODUCTS ADMIN */
+  .products-admin { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; }
+  .add-product-form { background: var(--surface); border-radius: 16px; padding: 24px; border: 1px solid var(--border); }
+  .add-product-form h3 { font-size: 16px; font-weight: 900; margin-bottom: 18px; }
+  .btn-add-product { width: 100%; padding: 12px; background: linear-gradient(135deg, var(--accent), var(--accent2)); color: #fff; border: none; border-radius: 10px; font-family: inherit; font-size: 15px; font-weight: 800; cursor: pointer; margin-top: 4px; }
+  .product-admin-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px; display: flex; align-items: center; gap: 14px; margin-bottom: 10px; }
+  .product-admin-thumb { width: 48px; height: 48px; border-radius: 8px; background: var(--bg); display: flex; align-items: center; justify-content: center; font-size: 24px; flex-shrink: 0; }
+  .product-admin-info { flex: 1; }
+  .product-admin-name { font-size: 14px; font-weight: 800; margin-bottom: 4px; }
+  .product-admin-meta { display: flex; gap: 8px; }
+  .meta-chip { font-size: 11px; padding: 2px 8px; border-radius: 20px; background: var(--bg); color: var(--muted); font-weight: 700; }
+  .meta-chip.gold { background: rgba(201,168,76,0.1); color: var(--accent); }
+  .stock-control { display: flex; align-items: center; gap: 8px; }
+  .stock-btn { width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid var(--border); background: var(--bg); font-size: 16px; font-weight: 800; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+  .stock-num { font-size: 16px; font-weight: 900; min-width: 24px; text-align: center; }
+  .btn-del-product { background: transparent; border: none; font-size: 18px; cursor: pointer; color: var(--danger); opacity: 0.6; }
+  .btn-del-product:hover { opacity: 1; }
+
+  /* SETTINGS */
+  .settings-form { background: var(--surface); border-radius: 16px; padding: 28px; border: 1px solid var(--border); max-width: 520px; }
+  .settings-form h3 { font-size: 18px; font-weight: 900; margin-bottom: 20px; }
+  .btn-save-settings { width: 100%; padding: 12px; background: linear-gradient(135deg, var(--accent), var(--accent2)); color: #fff; border: none; border-radius: 10px; font-family: inherit; font-size: 15px; font-weight: 800; cursor: pointer; margin-top: 8px; }
+
+  /* LOGIN */
+  .admin-login { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: var(--bg); }
+  .login-box { background: var(--surface); border-radius: 20px; padding: 40px; max-width: 380px; width: 90%; text-align: center; box-shadow: 0 8px 40px rgba(0,0,0,0.10); }
+  .login-icon { font-size: 48px; margin-bottom: 16px; }
+  .login-box h2 { font-size: 22px; font-weight: 900; margin-bottom: 8px; }
+  .login-box p { color: var(--muted); font-size: 14px; margin-bottom: 20px; }
+  .login-box input { width: 100%; padding: 12px 16px; border: 1.5px solid var(--border); border-radius: 10px; font-family: inherit; font-size: 15px; text-align: center; outline: none; margin-bottom: 12px; }
+  .login-btn { width: 100%; padding: 12px; background: linear-gradient(135deg, var(--accent), var(--accent2)); color: #fff; border: none; border-radius: 10px; font-family: inherit; font-size: 15px; font-weight: 800; cursor: pointer; margin-bottom: 10px; }
+  .back-btn { width: 100%; padding: 10px; background: transparent; border: 1.5px solid var(--border); border-radius: 10px; font-family: inherit; font-size: 14px; color: var(--muted); cursor: pointer; }
+  .login-error { color: var(--danger); font-size: 13px; margin-bottom: 10px; display: none; }
+
+  /* SUCCESS */
+  .success-box { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 12px; }
+  .success-icon { font-size: 64px; }
+  .success-box h2 { font-size: 26px; font-weight: 900; }
+  .success-box p { color: var(--muted); font-size: 15px; }
+  .success-box strong { color: var(--accent); }
+  .back-store-btn { background: linear-gradient(135deg, var(--accent), var(--accent2)); color: #fff; border: none; padding: 12px 28px; border-radius: 10px; font-family: inherit; font-size: 15px; font-weight: 800; cursor: pointer; margin-top: 8px; }
+
+  /* TOAST */
+  .toast { position: fixed; bottom: 32px; left: 50%; transform: translateX(-50%) translateY(20px); background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 14px 28px; border-radius: 10px; font-size: 14px; font-weight: 600; z-index: 999; transition: transform 0.3s, opacity 0.3s; opacity: 0; white-space: nowrap; box-shadow: 0 10px 40px rgba(0,0,0,0.4); }
+  .toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
+  .toast.success { border-color: rgba(82,192,120,0.4); color: var(--success); }
+  .toast.error { border-color: rgba(224,82,82,0.4); color: var(--danger); }
+
+  .empty-state { text-align: center; padding: 40px; color: var(--muted); }
+  .empty-state .emoji { font-size: 40px; margin-bottom: 10px; }
+</style>
+
+<script>
+// ===== ضغط الصور (لتفادي تجاوز حد Firebase 1MB) =====
+// يضغط الصورة إلى أبعاد قصوى مع جودة JPEG متغيرة حتى يصبح حجمها أقل من maxSizeKB
+async function compressImage(file, maxDimension = 800, maxSizeKB = 150) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        // حساب الأبعاد الجديدة مع الحفاظ على النسبة
+        let { width, height } = img;
+        if (width > height) {
+          if (width > maxDimension) { height = Math.round(height * maxDimension / width); width = maxDimension; }
+        } else {
+          if (height > maxDimension) { width = Math.round(width * maxDimension / height); height = maxDimension; }
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#fff'; // خلفية بيضاء لتفادي شفافية PNG
+        ctx.fillRect(0, 0, width, height);
+        ctx.drawImage(img, 0, 0, width, height);
+
+        // محاولة الضغط بجودات متعدرّجة
+        let quality = 0.85;
+        let dataUrl = canvas.toDataURL('image/jpeg', quality);
+        // حجم Base64 ≈ (length * 3/4)
+        while ((dataUrl.length * 0.75) > maxSizeKB * 1024 && quality > 0.3) {
+          quality -= 0.1;
+          dataUrl = canvas.toDataURL('image/jpeg', quality);
+        }
+        resolve(dataUrl);
+      };
+      img.onerror = reject;
+      img.src = e.target.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+// ===== STATE =====
+let state = {
+  products: [],
+  orders: [],
+  settings: {
+    storeName: 'SAJA Store',
+    tagline: 'SAJA Store',
+    adminPass: 'admin123',
+    logo: 'data:image/webp;base64,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'
+  },
+  currentProductId: null,
+  _version: "v3"
+};
+
+let fbReady = false;
+let unsubscribe = null;
+
+// ===== WAIT FOR FIREBASE =====
+window.addEventListener("fb-ready", async () => {
+  fbReady = true;
+  try {
+    // Load initial data
+    const data = await window.__fb.fbLoad();
+    if (data) {
+      state.products = data.products || [];
+      state.orders = data.orders || [];
+      state.settings = data.settings || state.settings;
+    }
+
+    // Listen for real-time changes from other devices
+    unsubscribe = window.__fb.fbListen((data) => {
+      state.products = data.products || [];
+      state.orders = data.orders || [];
+      state.settings = data.settings || state.settings;
+      // Re-render current view silently
+      const storeActive = document.getElementById('view-store').classList.contains('active');
+      const adminActive = document.getElementById('view-admin').classList.contains('active');
+      if (storeActive) renderStore();
+      if (adminActive) renderAdmin();
+    });
+
+  } catch(e) {
+    console.error("Firebase load error:", e);
+  }
+
+  // Hide loading overlay
+  document.getElementById('loadingOverlay').style.display = 'none';
+  renderStore();
+});
+
+// ===== SAVE =====
+// نُعرّف showToast على window حتى يصلها fbSave (الذي يعيش في module منفصل)
+window.showToast = function(msg, type = '') {
+  const t = document.getElementById('toast');
+  if (!t) return;
+  t.textContent = msg;
+  t.className = 'toast show ' + type;
+  setTimeout(() => t.className = 'toast', 3500);
+};
+
+async function save() {
+  if (!fbReady) {
+    window.showToast('⏳ Firebase لم يجهز بعد، حاول مرة أخرى', 'error');
+    return false;
+  }
+  try {
+    await window.__fb.fbSave(state);
+    return true;
+  } catch(e) {
+    console.error('Save failed:', e);
+    return false;
+  }
+}
+
+// ===== VIEWS =====
+function showView(id) {
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  if (id === 'view-store') renderStore();
+  if (id === 'view-admin') renderAdmin();
+}
+
+// ===== TOAST =====
+// (showToast الآن معرّفة على window في قسم SAVE أعلاه)
+function showToast(msg, type = '') { window.showToast(msg, type); }
+
+// ===== TABS =====
+function switchTab(tab) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+  event.target.classList.add('active');
+  document.getElementById('tab-' + tab).classList.add('active');
+  if (tab === 'settings') loadSettings();
+  if (tab === 'products') renderAdminProducts();
+}
+
+// ===== RENDER STORE =====
+function renderStore() {
+  const logoImg = document.getElementById('storeLogoImg');
+  const nameEl = document.getElementById('storeName');
+  if (state.settings.logo) {
+    logoImg.src = state.settings.logo;
+    logoImg.style.display = 'block';
+    // نُظهر اللوغو والاسم معاً (الاسم يصبح أصغر بجانب اللوغو)
+    nameEl.style.display = '';
+    nameEl.style.fontSize = '16px';
+    nameEl.innerHTML = state.settings.storeName || 'SAJA Store';
+  } else {
+    logoImg.style.display = 'none';
+    nameEl.style.display = '';
+    nameEl.style.fontSize = '';
+    nameEl.innerHTML = state.settings.storeName || 'متجر <span>الأكواد</span>';
+  }
+  document.getElementById('storeTagline').textContent = state.settings.tagline;
+  const grid = document.getElementById('productsGrid');
+
+  if (state.products.length === 0) {
+    grid.innerHTML = `<div style="grid-column:1/-1;text-align:center;padding:80px 20px;color:var(--muted)">
+      <div style="font-size:48px;margin-bottom:16px">🛍</div>
+      <p style="font-size:18px;font-weight:300">لا توجد منتجات بعد</p>
+    </div>`;
+    return;
+  }
+
+  grid.innerHTML = state.products.map(p => {
+    const soldOut = p.stock <= 0;
+    const low = p.stock > 0 && p.stock <= 3;
+    return `
+    <div class="product-card${soldOut ? ' sold-out' : ''}">
+      ${p.img
+        ? `<img src="${p.img}" class="product-img" alt="${p.name}">`
+        : `<div class="product-img-placeholder">🎁</div>`}
+      ${soldOut ? `<div class="sold-out-overlay">SOLD OUT</div>` : ''}
+      <div class="product-info">
+        <div class="product-name">${p.name}</div>
+        <div class="product-desc">${p.desc || ''}</div>
+        <div class="product-meta">
+          <span class="product-price">${p.price}</span>
+          <span class="product-stock${low ? ' low' : ''}">${soldOut ? 'نفذت الكمية' : `${p.stock} متبقي`}</span>
+        </div>
+        <button class="buy-btn" ${soldOut ? 'disabled' : `onclick="openModal('${p.id}')"`}>
+          ${soldOut ? '🚫 نفذت الكمية' : '🛒 اطلب الآن'}
+        </button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ===== MODAL =====
+function openModal(productId) {
+  state.currentProductId = productId;
+  const p = state.products.find(x => x.id === productId);
+  document.getElementById('modalProductName').textContent = p.name;
+  document.getElementById('modalProductPrice').textContent = p.price;
+  document.getElementById('buyName').value = '';
+  document.getElementById('buyEmail').value = '';
+  document.getElementById('buyQty').value = '1';
+  document.getElementById('buyModal').classList.add('open');
+}
+
+function closeModal() {
+  document.getElementById('buyModal').classList.remove('open');
+  state.currentProductId = null;
+}
+
+document.getElementById('buyModal').addEventListener('click', function(e) {
+  if (e.target === this) closeModal();
+});
+
+// ===== CONFIRM ORDER =====
+async function confirmOrder() {
+  const name = document.getElementById('buyName').value.trim();
+  const email = document.getElementById('buyEmail').value.trim();
+  const qty = parseInt(document.getElementById('buyQty').value) || 1;
+
+  if (!name) { showToast('الرجاء إدخال اسمك', 'error'); return; }
+  if (!email || !email.includes('@')) { showToast('الرجاء إدخال بريد إلكتروني صحيح', 'error'); return; }
+  if (qty < 1) { showToast('الكمية يجب أن تكون 1 على الأقل', 'error'); return; }
+
+  const p = state.products.find(x => x.id === state.currentProductId);
+  if (!p) return;
+
+  if (qty > p.stock) {
+    showToast(`الكمية المتاحة فقط ${p.stock} قطع`, 'error');
+    return;
+  }
+
+  const orderId = 'ORD-' + Date.now().toString(36).toUpperCase();
+  const order = {
+    id: orderId,
+    productId: p.id,
+    productName: p.name,
+    productPrice: p.price,
+    name, email, qty,
+    date: new Date().toLocaleString('ar-SA'),
+    timestamp: Date.now()
+  };
+
+  state.orders.unshift(order);
+  p.stock -= qty;
+
+  await save();
+  closeModal();
+  document.getElementById('successOrderId').textContent = orderId;
+  showView('view-success');
+}
+
+// ===== ADMIN LOGIN =====
+function adminLogin() {
+  const pass = document.getElementById('adminPassInput').value;
+  const err = document.getElementById('loginError');
+  if (pass === state.settings.adminPass) {
+    err.style.display = 'none';
+    document.getElementById('adminPassInput').value = '';
+    showView('view-admin');
+  } else {
+    err.style.display = 'block';
+  }
+}
+
+function adminLogout() { showView('view-store'); }
+
+// ===== RENDER ADMIN =====
+function renderAdmin() {
+  renderOrders();
+  renderAdminProducts();
+}
+
+function renderOrders() {
+  const orders = state.orders;
+  document.getElementById('ordersCount').textContent = orders.length + ' طلب';
+  const container = document.getElementById('ordersContainer');
+  if (orders.length === 0) {
+    container.innerHTML = `<div class="empty-state"><div class="emoji">📭</div><p>لا توجد طلبات بعد</p></div>`;
+    return;
+  }
+  container.innerHTML = `<table class="orders-table">
+    <thead><tr><th>#</th><th>رقم الطلب</th><th>الاسم</th><th>البريد</th><th>المنتج</th><th>الكمية</th><th>الإجمالي</th><th>التاريخ</th><th>الحالة</th><th>فاتورة</th><th>حذف</th></tr></thead>
+    <tbody>${orders.map((o, i) => `
+      <tr>
+        <td style="color:var(--muted);font-size:13px">${i + 1}</td>
+        <td><span class="order-num">${o.id}</span></td>
+        <td style="font-weight:600">${o.name}</td>
+        <td style="direction:ltr;text-align:right;font-size:12px;color:var(--muted)">${o.email}</td>
+        <td><span class="order-product-badge">${o.productName}</span></td>
+        <td style="font-weight:900;color:var(--accent);font-size:16px">${o.qty}</td>
+        <td style="font-weight:800;color:#2a7a4f">${calcTotal(o)}</td>
+        <td style="font-size:12px;color:var(--muted)">${o.date}</td>
+        <td><span class="status-new">جديد</span></td>
+        <td><button class="btn-invoice" onclick="showInvoice('${o.id}')">🧾</button></td>
+        <td><button class="btn-delete-order" onclick="deleteOrder('${o.id}')">🗑</button></td>
+      </tr>`).join('')}
+    </tbody></table>`;
+}
+
+async function deleteOrder(id) {
+  if (!confirm('هل تريد حذف هذا الطلب؟')) return;
+  state.orders = state.orders.filter(o => o.id !== id);
+  await save();
+  renderOrders();
+  showToast('تم حذف الطلب', 'success');
+}
+
+// ===== PRODUCTS ADMIN =====
+function renderAdminProducts() {
+  const list = document.getElementById('adminProductsList');
+  if (state.products.length === 0) {
+    list.innerHTML = `<div class="empty-state"><div class="emoji">📦</div><p>لا توجد منتجات بعد</p></div>`;
+    return;
+  }
+  list.innerHTML = state.products.map(p => `
+    <div class="product-admin-card">
+      ${p.img
+        ? `<img src="${p.img}" class="product-admin-thumb" style="width:64px;height:64px;object-fit:cover;border-radius:8px;flex-shrink:0">`
+        : `<div class="product-admin-thumb">🎁</div>`}
+      <div class="product-admin-info">
+        <div class="product-admin-name">${p.name}</div>
+        <div class="product-admin-meta">
+          <span class="meta-chip gold">${p.price}</span>
+          <span class="meta-chip">${p.stock <= 0 ? 'نفذت' : p.stock + ' قطعة'}</span>
+        </div>
+      </div>
+      <div class="stock-control">
+        <button class="stock-btn" onclick="changeStock('${p.id}', -1)">−</button>
+        <span class="stock-num">${p.stock}</span>
+        <button class="stock-btn" onclick="changeStock('${p.id}', 1)">+</button>
+      </div>
+      <button class="btn-del-product" onclick="deleteProduct('${p.id}')">🗑</button>
+    </div>
+  `).join('');
+}
+
+async function changeStock(id, delta) {
+  const p = state.products.find(x => x.id === id);
+  if (!p) return;
+  p.stock = Math.max(0, p.stock + delta);
+  await save();
+  renderAdminProducts();
+}
+
+async function deleteProduct(id) {
+  if (!confirm('هل تريد حذف هذا المنتج؟')) return;
+  state.products = state.products.filter(p => p.id !== id);
+  await save();
+  renderAdminProducts();
+  showToast('تم حذف المنتج', 'success');
+}
+
+// ===== IMAGE PREVIEW (مع ضغط تلقائي) =====
+let imgDataUrl = null;
+async function previewImg(input) {
+  const file = input.files[0]; if (!file) return;
+  const preview = document.getElementById('imgPreview');
+  try {
+    showToast('جاري ضغط الصورة...', '');
+    // ضغط إلى 800px قصوى وحد أقصى 150KB
+    imgDataUrl = await compressImage(file, 800, 150);
+    preview.src = imgDataUrl;
+    preview.style.display = 'block';
+    const finalKB = ((imgDataUrl.length * 0.75) / 1024).toFixed(1);
+    showToast(`✓ تم ضغط الصورة (${finalKB}KB)`, 'success');
+  } catch(err) {
+    console.error('Image compression error:', err);
+    showToast('❌ فشل معالجة الصورة', 'error');
+    imgDataUrl = null;
+    preview.style.display = 'none';
+  }
+}
+
+// ===== ADD PRODUCT =====
+async function addProduct() {
+  const name = document.getElementById('p_name').value.trim();
+  const desc = document.getElementById('p_desc').value.trim();
+  const price = document.getElementById('p_price').value.trim();
+  const stock = parseInt(document.getElementById('p_stock').value) || 0;
+  if (!name || !price) { showToast('الرجاء إدخال اسم المنتج والسعر', 'error'); return; }
+
+  const newProduct = { id: 'P-' + Date.now().toString(36), name, desc, price, stock, img: imgDataUrl || null };
+  state.products.push(newProduct);
+
+  const ok = await save();
+  if (!ok) {
+    // الحفظ في Firebase فشل → نُلغي الإضافة المحلية حتى لا يخدع الواجهة
+    state.products = state.products.filter(p => p.id !== newProduct.id);
+    renderAdminProducts();
+    return; // showToast الخطأ ظهر بالفعل من fbSave
+  }
+
+  document.getElementById('p_name').value = '';
+  document.getElementById('p_desc').value = '';
+  document.getElementById('p_price').value = '';
+  document.getElementById('p_stock').value = '';
+  document.getElementById('p_img').value = '';
+  document.getElementById('imgPreview').style.display = 'none';
+  imgDataUrl = null;
+  renderAdminProducts();
+  showToast('تم إضافة المنتج بنجاح! ✓', 'success');
+}
+
+// ===== LOGO (مع ضغط تلقائي) =====
+let logoDataUrl = null;
+async function previewLogo(input) {
+  const file = input.files[0]; if (!file) return;
+  const preview = document.getElementById('logoPreview');
+  try {
+    showToast('جاري ضغط الشعار...', '');
+    // الشعار أصغر: 400px قصوى و 80KB حد أقصى
+    logoDataUrl = await compressImage(file, 400, 80);
+    preview.src = logoDataUrl;
+    preview.style.display = 'block';
+    document.getElementById('removeLogoBtn').style.display = 'inline-block';
+    showToast('✓ تم ضغط الشعار', 'success');
+  } catch(err) {
+    console.error('Logo compression error:', err);
+    showToast('❌ فشل معالجة الشعار', 'error');
+    logoDataUrl = null;
+  }
+}
+
+async function removeLogo() {
+  logoDataUrl = null;
+  state.settings.logo = null;
+  document.getElementById('logoPreview').style.display = 'none';
+  document.getElementById('removeLogoBtn').style.display = 'none';
+  document.getElementById('s_logo').value = '';
+  await save();
+  showToast('تم حذف اللوقو', 'success');
+}
+
+// ===== SETTINGS =====
+function loadSettings() {
+  document.getElementById('s_name').value = state.settings.storeName;
+  document.getElementById('s_tagline').value = state.settings.tagline;
+  document.getElementById('s_pass').value = '';
+  const preview = document.getElementById('logoPreview');
+  const removeBtn = document.getElementById('removeLogoBtn');
+  if (state.settings.logo) {
+    preview.src = state.settings.logo; preview.style.display = 'block';
+    removeBtn.style.display = 'inline-block';
+  } else {
+    preview.style.display = 'none'; removeBtn.style.display = 'none';
+  }
+}
+
+async function saveSettings() {
+  const name = document.getElementById('s_name').value.trim();
+  const tagline = document.getElementById('s_tagline').value.trim();
+  const pass = document.getElementById('s_pass').value;
+  if (name) state.settings.storeName = name;
+  if (tagline) state.settings.tagline = tagline;
+  if (pass) state.settings.adminPass = pass;
+  if (logoDataUrl) state.settings.logo = logoDataUrl;
+  await save();
+  showToast('تم حفظ الإعدادات ✓', 'success');
+}
+
+// ===== EXPORT EXCEL =====
+function exportToExcel() {
+  if (state.orders.length === 0) { showToast('لا توجد طلبات للتصدير', 'error'); return; }
+  const rows = state.orders.map((o, i) => {
+    const p = state.products.find(x => x.id === o.productId);
+    const unitPrice = p ? p.price : o.productPrice || '—';
+    const priceNum = parseFloat((unitPrice + '').replace(/[^\d.]/g, ''));
+    const total = !isNaN(priceNum) ? (priceNum * o.qty) + ' ' + (unitPrice + '').replace(/[\d.,]/g, '').trim() : '—';
+    return { '#': i + 1, 'رقم الطلب': o.id, 'الاسم': o.name, 'البريد': o.email, 'المنتج': o.productName, 'الكمية': o.qty, 'الإجمالي': total, 'التاريخ': o.date };
+  });
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'الطلبات');
+  XLSX.writeFile(wb, `طلبات_${state.settings.storeName || 'SAJA'}_${new Date().toLocaleDateString('ar-SA').replace(/\//g, '-')}.xlsx`);
+  showToast('✅ تم تصدير الطلبات بنجاح!', 'success');
+}
+
+// ===== EXPORT CUSTOMERS =====
+// تصدير قائمة الزبائن الذين قاموا بالطلب (بدون تكرار) مع إحصاءات لكل زبون
+function exportCustomers() {
+  if (state.orders.length === 0) { showToast('لا توجد طلبات بعد', 'error'); return; }
+
+  // تجميع الطلبات حسب البريد (مفتاح فريد للزبون)
+  const customersMap = {};
+  state.orders.forEach(o => {
+    const key = (o.email || o.name || '').toLowerCase().trim();
+    if (!key) return;
+    if (!customersMap[key]) {
+      customersMap[key] = {
+        name: o.name,
+        email: o.email,
+        orderCount: 0,
+        totalQty: 0,
+        totalSpent: 0,
+        currency: '',
+        products: new Set(),
+        firstOrder: o.date,
+        lastOrder: o.date
+      };
+    }
+    const c = customersMap[key];
+    c.orderCount++;
+    c.totalQty += (o.qty || 0);
+
+    // حساب الإجمالي
+    const p = state.products.find(x => x.id === o.productId);
+    const priceStr = (p ? p.price : o.productPrice || '').toString();
+    const priceNum = parseFloat(priceStr.replace(/[^\d.]/g, ''));
+    if (!isNaN(priceNum)) {
+      c.totalSpent += priceNum * (o.qty || 0);
+      const unit = priceStr.replace(/[\d.,]/g, '').trim();
+      if (unit && !c.currency) c.currency = unit;
+    }
+    c.products.add(o.productName);
+    if (o.date < c.firstOrder) c.firstOrder = o.date;
+    if (o.date > c.lastOrder) c.lastOrder = o.date;
+  });
+
+  const customers = Object.values(customersMap);
+  if (customers.length === 0) { showToast('لا يوجد زبائن للتصدير', 'error'); return; }
+
+  // الترتيب حسب الأكثر إنفاقاً
+  customers.sort((a, b) => b.totalSpent - a.totalSpent);
+
+  const rows = customers.map((c, i) => ({
+    '#': i + 1,
+    'الاسم': c.name,
+    'البريد الإلكتروني': c.email,
+    'عدد الطلبات': c.orderCount,
+    'إجمالي الكمية': c.totalQty,
+    'إجمالي الإنفاق': c.totalSpent > 0 ? (c.totalSpent.toLocaleString('ar-SA') + ' ' + c.currency).trim() : '—',
+    'المنتجات المشتراة': Array.from(c.products).join('، '),
+    'أول طلب': c.firstOrder,
+    'آخر طلب': c.lastOrder
+  }));
+
+  const ws = XLSX.utils.json_to_sheet(rows);
+  // تحديد عرض الأعمدة لقراءة أفضل
+  ws['!cols'] = [{wch:5},{wch:20},{wch:28},{wch:12},{wch:14},{wch:18},{wch:40},{wch:18},{wch:18}];
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'الزبائن');
+  const fileName = `زبائن_${state.settings.storeName || 'SAJA'}_${new Date().toLocaleDateString('ar-SA').replace(/\//g, '-')}.xlsx`;
+  XLSX.writeFile(wb, fileName);
+  showToast(`✅ تم تصدير ${customers.length} زبون بنجاح!`, 'success');
+}
+
+// ===== CALC TOTAL =====
+function calcTotal(order) {
+  const p = state.products.find(x => x.id === order.productId);
+  const priceStr = (p ? p.price : order.productPrice || '').toString();
+  const num = parseFloat(priceStr.replace(/[^\d.]/g, ''));
+  if (isNaN(num)) return priceStr || '—';
+  const unit = priceStr.replace(/[\d.,]/g, '').trim();
+  return (num * order.qty).toLocaleString('ar-SA') + ' ' + unit;
+}
+
+// ===== INVOICE =====
+function showInvoice(orderId) {
+  const o = state.orders.find(x => x.id === orderId);
+  if (!o) return;
+  const p = state.products.find(x => x.id === o.productId);
+  const unitPrice = p ? p.price : (o.productPrice || '—');
+  const total = calcTotal(o);
+  const logo = state.settings.logo || '';
+  const storeName = state.settings.storeName || 'SAJA Store';
+  const logoHTML = logo
+    ? '<img src="' + logo + '" alt="logo" style="height:54px;max-width:170px;object-fit:contain">'
+    : '<div style="font-size:22px;font-weight:900;color:#1a1a2e">' + storeName + '</div>';
+
+  const invoiceHTML = '<!DOCTYPE html><html dir="rtl" lang="ar"><head><meta charset="UTF-8"><title>فاتورة ' + o.id + '</title>'
+    + '<link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;700;800;900&display=swap" rel="stylesheet">'
+    + '<style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:"Tajawal",sans-serif;background:#f0f0f5;padding:32px;color:#1a1a2e}.page{background:#fff;border-radius:16px;padding:48px;max-width:640px;margin:0 auto;box-shadow:0 4px 32px rgba(0,0,0,0.10)}.header{display:flex;justify-content:space-between;align-items:center;padding-bottom:28px;border-bottom:2px solid #f0f0f5;margin-bottom:32px}.inv-label h2{font-size:32px;font-weight:900;color:#c9a84c}.inv-label p{font-size:13px;color:#999;margin-top:4px}.section{margin-bottom:24px}.section-title{font-size:11px;font-weight:800;color:#bbb;text-transform:uppercase;letter-spacing:2px;margin-bottom:10px}.info-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.info-item{background:#f8f8fa;border-radius:8px;padding:12px 16px}.info-item .lbl{font-size:11px;color:#aaa;font-weight:600;margin-bottom:4px}.info-item .val{font-size:15px;font-weight:700}table{width:100%;border-collapse:collapse;margin-bottom:24px}thead th{text-align:right;padding:10px 14px;background:#f8f8fa;font-size:12px;font-weight:800;color:#888}tbody td{padding:14px;border-bottom:1px solid #f0f0f5;font-size:14px}.total-row{background:linear-gradient(135deg,#fdf8ee,#fff9e8)}.total-row td{font-size:17px;font-weight:900;color:#c9a84c;border:none;padding:16px 14px}.badge{display:inline-block;background:rgba(82,192,120,0.1);border:1px solid rgba(82,192,120,0.3);color:#3aa86a;padding:3px 12px;border-radius:20px;font-size:12px;font-weight:700}.print-btn{display:block;width:100%;margin-top:24px;background:linear-gradient(135deg,#c9a84c,#e8c96b);color:#fff;border:none;padding:14px;border-radius:10px;font-family:"Tajawal",sans-serif;font-size:16px;font-weight:800;cursor:pointer}@media print{.print-btn{display:none}body{background:#fff;padding:0}.page{box-shadow:none;border-radius:0}}</style></head><body>'
+    + '<div class="page"><div class="header"><div>' + logoHTML + '</div><div class="inv-label"><h2>فاتورة</h2><p>رقم: ' + o.id + '</p><p style="margin-top:4px">' + o.date + '</p></div></div>'
+    + '<div class="section"><div class="section-title">بيانات العميل</div><div class="info-grid"><div class="info-item"><div class="lbl">الاسم</div><div class="val">' + o.name + '</div></div><div class="info-item"><div class="lbl">البريد الإلكتروني</div><div class="val" style="direction:ltr;font-size:13px">' + o.email + '</div></div></div></div>'
+    + '<div class="section"><div class="section-title">تفاصيل الطلب</div><table><thead><tr><th>المنتج</th><th>سعر الوحدة</th><th>الكمية</th><th>الإجمالي</th></tr></thead><tbody><tr><td style="font-weight:700">' + o.productName + '</td><td>' + unitPrice + '</td><td style="font-weight:900;color:#c9a84c;font-size:18px">' + o.qty + '</td><td style="font-weight:800">' + total + '</td></tr><tr class="total-row"><td colspan="3" style="text-align:left;font-size:13px;color:#aaa">المجموع الكلي</td><td>' + total + '</td></tr></tbody></table></div>'
+    + '<div style="display:flex;justify-content:space-between;align-items:center;background:#f8f8fa;border-radius:10px;padding:14px 18px;margin-bottom:24px"><span style="font-size:14px;color:#888">حالة الطلب</span><span class="badge">✓ تم الاستلام</span></div>'
+    + '<div style="text-align:center;padding-top:24px;border-top:1px solid #f0f0f5;color:#ccc;font-size:12px">' + storeName + ' • شكراً لثقتك بنا</div>'
+    + '<button class="print-btn" onclick="window.print()">🖨 طباعة الفاتورة</button></div></body></html>';
+
+  const win = window.open('', '_blank', 'width=750,height=750');
+  win.document.write(invoiceHTML);
+  win.document.close();
+}
+</script>
+</body>
+</html>
